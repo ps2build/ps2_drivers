@@ -14,19 +14,58 @@ project(ps2_drivers VERSION 1.0.0 LANGUAGES C)
 # Options
 option(BUILD_SAMPLES "Build sample projects" ON)
 
-# Check if PS2SDK is set (should be done by toolchain file)
-if(NOT DEFINED PS2SDK)
-    message(FATAL_ERROR "PS2SDK is not defined. Make sure the toolchain file is loaded correctly.")
-endif()
+# ============================================================================
+# Real per-package resolution
+# ============================================================================
+# This project used to depend on a flat $PS2SDK tree (${PS2SDK}/iop/irx/
+# for pre-built IRX blobs, ${PS2SDK}/ee/lib/ for EE-side archives) that
+# no longer exists at all in the per-package ps2dev-suite distribution -
+# ps2dev.cmake deliberately stopped defining a PS2SDK variable once
+# ps2gl/ps2stuff moved off it ("There is no more flat $PS2SDK tree to
+# point at" - its own comment). Every real dependency now lives at
+# $PS2DEV/packages/<tier>/<name>/{bin,lib}/ instead - resolve from
+# there directly.
+set(PS2_PACKAGES "$ENV{PS2DEV}/packages")
 
-# Set the bin2c tool path
+# ps2_pkg_irx(<out_var> <tier> <pkg_name> <irx_filename>)
+# Sets <out_var> to the real installed path if it exists, or to
+# "<out_var>-NOTFOUND" (and a real STATUS message) if the package
+# hasn't been migrated/built yet - callers gate on this instead of
+# assuming every driver is always available.
+function(ps2_pkg_irx out_var tier pkg_name irx_filename)
+    set(_path "${PS2_PACKAGES}/${tier}/${pkg_name}/bin/${irx_filename}")
+    if(EXISTS "${_path}")
+        set(${out_var} "${_path}" PARENT_SCOPE)
+    else()
+        set(${out_var} "${out_var}-NOTFOUND" PARENT_SCOPE)
+        message(STATUS "ps2_drivers: ${tier}/${pkg_name} (${irx_filename}) not installed - skipping the driver(s) that need it")
+    endif()
+endfunction()
+
+# ps2_pkg_lib(<out_var> <tier> <pkg_name> <lib_filename>)
+# Same as ps2_pkg_irx, for EE-side .a archives.
+function(ps2_pkg_lib out_var tier pkg_name lib_filename)
+    set(_path "${PS2_PACKAGES}/${tier}/${pkg_name}/lib/${lib_filename}")
+    if(EXISTS "${_path}")
+        set(${out_var} "${_path}" PARENT_SCOPE)
+    else()
+        set(${out_var} "${out_var}-NOTFOUND" PARENT_SCOPE)
+        message(STATUS "ps2_drivers: ${tier}/${pkg_name} (${lib_filename}) not installed - final library may fail to link")
+    endif()
+endfunction()
+
+# Set the bin2c tool path - a real ps2build-managed component now
+# (ps2build update bin2c), not part of any package tree.
 if(NOT DEFINED BIN2C)
-    set(BIN2C "${PS2SDK}/bin/bin2c")
+    set(BIN2C "$ENV{PS2DEV}/bin/tools/bin2c.exe")
+endif()
+if(NOT EXISTS "${BIN2C}")
+    message(FATAL_ERROR "bin2c not found at ${BIN2C} - run 'ps2build update bin2c'.")
 endif()
 
-set(INSTALL_LIB_DIR "${PS2SDK}/ports/lib" CACHE PATH "Installation directory for libraries")
-set(INSTALL_INC_DIR "${PS2SDK}/ports/include" CACHE PATH "Installation directory for headers")
-set(INSTALL_PKGCONFIG_DIR "${PS2SDK}/ports/lib/pkgconfig" CACHE PATH "Installation directory for pkgconfig (.pc) files")
+set(INSTALL_LIB_DIR "${PS2_PACKAGES}/world/ps2_drivers/lib" CACHE PATH "Installation directory for libraries")
+set(INSTALL_INC_DIR "${PS2_PACKAGES}/world/ps2_drivers/include" CACHE PATH "Installation directory for headers")
+set(INSTALL_PKGCONFIG_DIR "${PS2_PACKAGES}/world/ps2_drivers/lib/pkgconfig" CACHE PATH "Installation directory for pkgconfig (.pc) files")
 
 # Prepare git metadata
 set(CUR_GIT_TAG v0.0.0)
@@ -87,20 +126,28 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 
 # ============================================================================
 # Function: add_irx_source
-# Converts an IRX file to a C source file using bin2c
+# Converts a real, installed IRX file to a C source file using bin2c -
+# a no-op (out_var left NOTFOUND) if the package isn't installed yet.
 # ============================================================================
-function(add_irx_source irx_name output_var)
-    set(irx_path "${PS2SDK}/iop/irx/${irx_name}.irx")
-    # IRX file names may contain hyphens (ps2ip-nm.irx); the resulting C
-    # symbol must use underscores (ps2ip_nm_irx) to be a valid identifier.
-    string(REPLACE "-" "_" irx_symbol "${irx_name}")
+function(add_irx_source tier pkg_name irx_filename output_var)
+    ps2_pkg_irx(_irx_path ${tier} ${pkg_name} ${irx_filename})
+    if(NOT _irx_path)
+        set(${output_var} "" PARENT_SCOPE)
+        return()
+    endif()
+
+    # IRX file names may contain hyphens; the resulting C symbol must
+    # use underscores to be a valid identifier (matches EXTERN_IRX()'s
+    # own real naming convention in the driver sources).
+    get_filename_component(irx_stem "${irx_filename}" NAME_WE)
+    string(REPLACE "-" "_" irx_symbol "${irx_stem}")
     set(output_c "${CMAKE_CURRENT_BINARY_DIR}/${irx_symbol}_irx.c")
 
     add_custom_command(
         OUTPUT ${output_c}
-        COMMAND ${BIN2C} ${irx_path} ${output_c} ${irx_symbol}_irx
-        DEPENDS ${irx_path}
-        COMMENT "Converting ${irx_name}.irx to C source"
+        COMMAND ${BIN2C} ${_irx_path} ${output_c} ${irx_symbol}_irx
+        DEPENDS ${_irx_path}
+        COMMENT "Converting ${irx_filename} to C source"
         VERBATIM
     )
 
@@ -128,190 +175,119 @@ function(add_driver_objects driver_name)
 endfunction()
 
 # ============================================================================
-# Generate IRX source files
+# Resolve real IRX sources - each may be unavailable (NOTFOUND) if its
+# package hasn't been migrated/built yet. Real tier/name/filename per
+# package.yaml, not guessed - see each artifact's own irx: field.
 # ============================================================================
-add_irx_source(sio2man SIO2MAN_IRX)
-add_irx_source(iomanX IOMANX_IRX)
-add_irx_source(fileXio FILEXIO_IRX)
-add_irx_source(mcman MCMAN_IRX)
-add_irx_source(mcserv MCSERV_IRX)
-add_irx_source(bdm BDM_IRX)
-add_irx_source(bdmfs_fatfs BDMFS_FATFS_IRX)
-add_irx_source(usbd USBD_IRX)
-add_irx_source(usbmass_bd USBMASS_BD_IRX)
-add_irx_source(mx4sio_bd MX4SIO_BD_IRX)
-add_irx_source(cdfs CDFS_IRX)
-add_irx_source(ps2dev9 PS2DEV9_IRX)
-add_irx_source(ps2atad PS2ATAD_IRX)
-add_irx_source(ps2hdd PS2HDD_IRX)
-add_irx_source(ps2fs PS2FS_IRX)
-add_irx_source(mtapman MTAPMAN_IRX)
-add_irx_source(padman PADMAN_IRX)
-add_irx_source(libsd LIBSD_IRX)
-add_irx_source(audsrv AUDSRV_IRX)
-add_irx_source(poweroff POWEROFF_IRX)
-add_irx_source(ps2mouse PS2MOUSE_IRX)
-add_irx_source(ps2kbd PS2KBD_IRX)
-add_irx_source(ps2cam PS2CAM_IRX)
-add_irx_source(netman NETMAN_IRX)
-add_irx_source(smap SMAP_IRX)
-add_irx_source(ps2ip-nm PS2IP_NM_IRX)
-add_irx_source(ps2ips PS2IPS_IRX)
+add_irx_source(core sio2man sio2man.irx SIO2MAN_IRX)
+add_irx_source(core iomanx iomanX.irx IOMANX_IRX)
+add_irx_source(core filexio fileXio.irx FILEXIO_IRX)
+add_irx_source(core mcman mcman.irx MCMAN_IRX)
+add_irx_source(core mcserv mcserv.irx MCSERV_IRX)
+add_irx_source(core bdm bdm.irx BDM_IRX)
+add_irx_source(core bdmfs_fatfs bdmfs_fatfs.irx BDMFS_FATFS_IRX)
+add_irx_source(core usbd usbd.irx USBD_IRX)
+add_irx_source(core usbmass_bd usbmass_bd.irx USBMASS_BD_IRX)   # not yet migrated
+add_irx_source(core mx4sio_bd mx4sio_bd.irx MX4SIO_BD_IRX)      # not yet migrated
+add_irx_source(core cdfs cdfs.irx CDFS_IRX)                     # not yet migrated
+add_irx_source(core dev9 ps2dev9.irx PS2DEV9_IRX)                # not yet migrated
+add_irx_source(core atad ps2atad.irx PS2ATAD_IRX)                 # not yet migrated
+add_irx_source(core hdd ps2hdd.irx PS2HDD_IRX)                   # not yet migrated
+add_irx_source(core fs ps2fs.irx PS2FS_IRX)                    # not yet migrated
+add_irx_source(core mtapman mtapman.irx MTAPMAN_IRX)
+add_irx_source(core padman padman.irx PADMAN_IRX)
+add_irx_source(core libsd libsd.irx LIBSD_IRX)
+add_irx_source(world audsrv audsrv.irx AUDSRV_IRX)
+add_irx_source(core poweroff poweroff.irx POWEROFF_IRX)
+add_irx_source(core mouse ps2mouse.irx PS2MOUSE_IRX)
+add_irx_source(core kbd ps2kbd.irx PS2KBD_IRX)
+add_irx_source(core ps2cam ps2cam.irx PS2CAM_IRX)
+add_irx_source(core netman netman.irx NETMAN_IRX)
+add_irx_source(core smap smap.irx SMAP_IRX)
+add_irx_source(core ps2ip-nm ps2ip-nm.irx PS2IP_NM_IRX)          # deferred: real IOP-side lwip port
+add_irx_source(core ps2ips-iop ps2ips.irx PS2IPS_IRX)            # deferred: real IOP-side lwip port
 
-set(IRX_SOURCES
-    ${SIO2MAN_IRX}
-    ${IOMANX_IRX}
-    ${FILEXIO_IRX}
-    ${MCMAN_IRX}
-    ${MCSERV_IRX}
-    ${BDM_IRX}
-    ${BDMFS_FATFS_IRX}
-    ${USBD_IRX}
-    ${USBMASS_BD_IRX}
-    ${MX4SIO_BD_IRX}
-    ${CDFS_IRX}
-    ${PS2DEV9_IRX}
-    ${PS2ATAD_IRX}
-    ${PS2HDD_IRX}
-    ${PS2FS_IRX}
-    ${MTAPMAN_IRX}
-    ${PADMAN_IRX}
-    ${LIBSD_IRX}
-    ${AUDSRV_IRX}
-    ${POWEROFF_IRX}
-    ${PS2MOUSE_IRX}
-    ${PS2KBD_IRX}
-    ${PS2CAM_IRX}
-    ${NETMAN_IRX}
-    ${SMAP_IRX}
-    ${PS2IP_NM_IRX}
-    ${PS2IPS_IRX}
-)
+set(IRX_SOURCES "")
+foreach(_v SIO2MAN_IRX IOMANX_IRX FILEXIO_IRX MCMAN_IRX MCSERV_IRX BDM_IRX
+          BDMFS_FATFS_IRX USBD_IRX USBMASS_BD_IRX MX4SIO_BD_IRX CDFS_IRX
+          PS2DEV9_IRX PS2ATAD_IRX PS2HDD_IRX PS2FS_IRX MTAPMAN_IRX
+          PADMAN_IRX LIBSD_IRX AUDSRV_IRX POWEROFF_IRX PS2MOUSE_IRX
+          PS2KBD_IRX PS2CAM_IRX NETMAN_IRX SMAP_IRX PS2IP_NM_IRX PS2IPS_IRX)
+    if(${_v})
+        list(APPEND IRX_SOURCES ${${_v}})
+    endif()
+endforeach()
 
 # ============================================================================
-# Generate driver objects
+# Generate driver objects - each gated on the real IRX(es) it embeds
+# actually being available (a driver .c file calls EXTERN_IRX() on
+# each one by name, so it can't even compile, let alone work, without
+# the matching embed above).
 # ============================================================================
-# SIO2MAN driver
-add_driver_objects(sio2man internals init deinit)
+set(_ps2_drivers_available "")
+set(_ps2_drivers_skipped "")
+set(ALL_DRIVER_OBJECTS "")
 
-# FileXio driver
-add_driver_objects(fileXio internals init deinit)
+macro(_maybe_add_driver name)
+    if(${ARGN})
+        add_driver_objects(${name} ${_driver_funcs_${name}})
+        list(APPEND ALL_DRIVER_OBJECTS ${${name}_DRIVER_OBJECTS})
+        list(APPEND _ps2_drivers_available ${name})
+    else()
+        list(APPEND _ps2_drivers_skipped ${name})
+    endif()
+endmacro()
 
-# Memory card driver
-add_driver_objects(memcard internals init deinit)
+set(_driver_funcs_sio2man internals init deinit)
+set(_driver_funcs_fileXio internals init deinit)
+set(_driver_funcs_memcard internals init deinit)
+set(_driver_funcs_bdm internals init deinit)
+set(_driver_funcs_usbd internals init deinit)
+set(_driver_funcs_usb internals init deinit)
+set(_driver_funcs_mx4sio internals init deinit)
+set(_driver_funcs_cdfs internals init deinit)
+set(_driver_funcs_dev9 internals init deinit)
+set(_driver_funcs_hdd internals init deinit mount_hdd_partition mount_current_partition umount_hdd_partition umount_current_partition)
+set(_driver_funcs_filesystem waitUntilDeviceIsReady rootDevicePath getBootDeviceID __internal_deinit deinit init __internal_deinit_only_boot deinit_only_boot init_only_boot)
+set(_driver_funcs_joystick internals init deinit)
+set(_driver_funcs_audio internals init deinit)
+set(_driver_funcs_poweroff internals init deinit)
+set(_driver_funcs_mouse internals init deinit)
+set(_driver_funcs_keyboard internals init deinit)
+set(_driver_funcs_camera internals init deinit)
+set(_driver_funcs_netman internals init deinit)
+set(_driver_funcs_smap internals init deinit)
+set(_driver_funcs_eeip internals init deinit configure_eeip_network eeip_network_config_default_dhcp eeip_get_current_config)
+set(_driver_funcs_iopip internals init deinit configure_iopip_network iopip_network_config_default iopip_get_current_config)
 
-# BDM driver
-add_driver_objects(bdm internals init deinit)
-
-# USBD driver
-add_driver_objects(usbd internals init deinit)
-
-# USB driver
-add_driver_objects(usb internals init deinit)
-
-# MX4SIO driver
-add_driver_objects(mx4sio internals init deinit)
-
-# CDFS driver
-add_driver_objects(cdfs internals init deinit)
-
-# DEV9 driver
-add_driver_objects(dev9 internals init deinit)
-
-# HDD driver
-add_driver_objects(hdd
-    internals
-    init
-    deinit
-    mount_hdd_partition
-    mount_current_partition
-    umount_hdd_partition
-    umount_current_partition
-)
-
-# Filesystem driver
-add_driver_objects(filesystem
-    waitUntilDeviceIsReady
-    rootDevicePath
-    getBootDeviceID
-    __internal_deinit
-    deinit
-    init
-    __internal_deinit_only_boot
-    deinit_only_boot
-    init_only_boot
-)
-
-# Joystick driver
-add_driver_objects(joystick internals init deinit)
-
-# Audio driver
-add_driver_objects(audio internals init deinit)
-
-# Poweroff driver
-add_driver_objects(poweroff internals init deinit)
-
-# Mouse driver
-add_driver_objects(mouse internals init deinit)
-
-# Keyboard driver
-add_driver_objects(keyboard internals init deinit)
-
-# Camera driver
-add_driver_objects(camera internals init deinit)
-
-# Netman driver
-add_driver_objects(netman internals init deinit)
-
-# SMAP driver
-add_driver_objects(smap internals init deinit)
-
-# EEIP driver
-add_driver_objects(eeip
-    internals
-    init
-    deinit
-    configure_eeip_network
-    eeip_network_config_default_dhcp
-    eeip_get_current_config
-)
-
-# IOPIP driver
-add_driver_objects(iopip
-    internals
-    init
-    deinit
-    configure_iopip_network
-    iopip_network_config_default
-    iopip_get_current_config
-)
+_maybe_add_driver(sio2man SIO2MAN_IRX)
+_maybe_add_driver(fileXio IOMANX_IRX AND FILEXIO_IRX)
+_maybe_add_driver(memcard MCMAN_IRX AND MCSERV_IRX)
+_maybe_add_driver(bdm BDM_IRX AND BDMFS_FATFS_IRX)
+_maybe_add_driver(usbd USBD_IRX)
+_maybe_add_driver(usb BDMFS_FATFS_IRX AND USBMASS_BD_IRX)
+_maybe_add_driver(mx4sio MX4SIO_BD_IRX)
+_maybe_add_driver(cdfs CDFS_IRX)
+_maybe_add_driver(dev9 PS2DEV9_IRX)
+_maybe_add_driver(hdd PS2ATAD_IRX AND PS2HDD_IRX AND PS2FS_IRX)
+_maybe_add_driver(filesystem TRUE)   # pure orchestration, no IRX of its own
+_maybe_add_driver(joystick MTAPMAN_IRX AND PADMAN_IRX)
+_maybe_add_driver(audio LIBSD_IRX AND AUDSRV_IRX)
+_maybe_add_driver(poweroff POWEROFF_IRX)
+_maybe_add_driver(mouse PS2MOUSE_IRX)
+_maybe_add_driver(keyboard PS2KBD_IRX)
+_maybe_add_driver(camera PS2CAM_IRX)
+_maybe_add_driver(netman NETMAN_IRX)
+_maybe_add_driver(smap SMAP_IRX)
+_maybe_add_driver(eeip TRUE)   # EE-side lwip (core/ps2ip) needs no IRX of its own to load
+_maybe_add_driver(iopip PS2IPS_IRX AND PS2IP_NM_IRX)
 
 # ============================================================================
 # Build the implementation library
 # ============================================================================
 add_library(ps2_drivers_impl STATIC
     ${IRX_SOURCES}
-    ${sio2man_DRIVER_OBJECTS}
-    ${fileXio_DRIVER_OBJECTS}
-    ${memcard_DRIVER_OBJECTS}
-    ${bdm_DRIVER_OBJECTS}
-    ${usbd_DRIVER_OBJECTS}
-    ${usb_DRIVER_OBJECTS}
-    ${mx4sio_DRIVER_OBJECTS}
-    ${cdfs_DRIVER_OBJECTS}
-    ${dev9_DRIVER_OBJECTS}
-    ${hdd_DRIVER_OBJECTS}
-    ${filesystem_DRIVER_OBJECTS}
-    ${joystick_DRIVER_OBJECTS}
-    ${audio_DRIVER_OBJECTS}
-    ${poweroff_DRIVER_OBJECTS}
-    ${mouse_DRIVER_OBJECTS}
-    ${keyboard_DRIVER_OBJECTS}
-    ${camera_DRIVER_OBJECTS}
-    ${netman_DRIVER_OBJECTS}
-    ${smap_DRIVER_OBJECTS}
-    ${eeip_DRIVER_OBJECTS}
-    ${iopip_DRIVER_OBJECTS}
+    ${ALL_DRIVER_OBJECTS}
 )
 
 set_target_properties(ps2_drivers_impl PROPERTIES
@@ -319,23 +295,45 @@ set_target_properties(ps2_drivers_impl PROPERTIES
     ARCHIVE_OUTPUT_NAME "ps2_drivers_impl"
 )
 
+# bin2c's own generated *_irx.c files start with "#pragma once" (a
+# normal header-guard idiom) but get compiled directly as their own
+# translation unit here, not #include'd - triggers a real, pedantic
+# -Werror=pragma-once-outside-header under this project's global
+# -Werror. Real, harmless (the pragma has no effect either way for a
+# file that's never included), not worth restructuring bin2c's own
+# output for - just don't error on it for these specific generated
+# files.
+if(IRX_SOURCES)
+    set_source_files_properties(${IRX_SOURCES} PROPERTIES
+        COMPILE_OPTIONS "-Wno-error=pragma-once-outside-header"
+    )
+endif()
+
 # ============================================================================
-# Combine with PS2SDK libraries to create final library
+# Combine with real, installed per-package EE-side libraries
 # ============================================================================
-# List of PS2SDK libraries to combine
-set(PS2SDK_LIBS
-    "${PS2SDK}/ee/lib/libfileXio.a"
-    "${PS2SDK}/ee/lib/libmtap.a"
-    "${PS2SDK}/ee/lib/libpadx.a"
-    "${PS2SDK}/ee/lib/libaudsrv.a"
-    "${PS2SDK}/ee/lib/libpoweroff.a"
-    "${PS2SDK}/ee/lib/libmouse.a"
-    "${PS2SDK}/ee/lib/libkbd.a"
-    "${PS2SDK}/ee/lib/libps2cam.a"
-    "${PS2SDK}/ee/lib/libnetman.a"
-    "${PS2SDK}/ee/lib/libps2ip.a"
-    "${PS2SDK}/ee/lib/libps2ips.a"
+set(PS2SDK_LIBS "")
+foreach(_pair
+    "core;filexio;libfilexio.a"
+    "core;mtap;libmtap.a"
+    "core;pad;libpad.a"
+    "world;audsrv;libaudsrv.a"
+    "core;poweroff;libpoweroff.a"
+    "core;mouse;libmouse.a"
+    "core;kbd;libkbd.a"
+    "core;ps2cam;libps2cam.a"
+    "core;netman;libnetman.a"
+    "core;ps2ip;libps2ip.a"
+    "core;ps2ips;libps2ips.a"
 )
+    list(GET _pair 0 _tier)
+    list(GET _pair 1 _name)
+    list(GET _pair 2 _file)
+    ps2_pkg_lib(_lib_path ${_tier} ${_name} ${_file})
+    if(_lib_path)
+        list(APPEND PS2SDK_LIBS "${_lib_path}")
+    endif()
+endforeach()
 
 # Create the combined library using ar with MRI script
 # Generate the MRI script content with all libraries to combine
@@ -414,5 +412,11 @@ message(STATUS "ps2_drivers configuration:")
 message(STATUS "  Version: ${PROJECT_VERSION}")
 message(STATUS "  Build samples: ${BUILD_SAMPLES}")
 message(STATUS "  Output library: ${EE_LIB_COMBINED}")
-message(STATUS "  Install prefix: ${PS2SDK}/ports")
+message(STATUS "  Install prefix: ${PS2_PACKAGES}/world/ps2_drivers")
+list(SORT _ps2_drivers_available)
+list(SORT _ps2_drivers_skipped)
+message(STATUS "  Drivers available: ${_ps2_drivers_available}")
+if(_ps2_drivers_skipped)
+    message(STATUS "  Drivers skipped (real, not-yet-migrated sdk-core/sdk-world prerequisite): ${_ps2_drivers_skipped}")
+endif()
 message(STATUS "")

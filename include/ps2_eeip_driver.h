@@ -15,6 +15,15 @@
 
 #include <stdbool.h>
 #include <ps2ip.h>
+/* struct ip4_addr (by value below, not just by pointer)/IP4_ADDR()/
+ * ip_addr_set()/ip4_addr_set_zero() are real lwip API, not part of
+ * ps2ip.h's own deliberately minimal surface - include directly
+ * rather than relying on it to come along transitively (real,
+ * previously-latent gap, since sdk-core/sys/socket.h's minimal
+ * variant, which an external CMake consumer's package include-path
+ * order can easily land on instead of lwip's own, doesn't provide the
+ * complete type at all). */
+#include <lwip/ip_addr.h>
 
 #ifdef __cplusplus
 extern "C" {
