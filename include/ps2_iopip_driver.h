@@ -14,7 +14,12 @@
 #define PS2_IOPIP_DRIVER
 
 #include <stdbool.h>
-#include <ps2ips.h>     /* IOP-side socket RPC + transitively struct ip4_addr */
+#include <ps2ips.h>     /* IOP-side socket RPC */
+/* ps2ips.h's own <sys/socket.h> resolves to libcglue's real POSIX-named
+   header (see sdk-core's own "tcpip.h retired..." migration note), not
+   lwip's real headers - struct ip4_addr needs its own explicit include,
+   same real fix already applied to ps2_eeip_driver.h. */
+#include <lwip/ip_addr.h>
 
 #ifdef __cplusplus
 extern "C" {
