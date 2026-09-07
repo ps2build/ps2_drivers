@@ -20,7 +20,7 @@ jobs:
 
       # ps2dev.cmake installed by setup-sdk itself; CMakeLists.txt
       # already defaults CMAKE_TOOLCHAIN_FILE to
-      # $ENV{PS2DEV}/share/ps2dev.cmake, so setting PS2DEV is all this
+      # $ENV{PS2DEV}/cmake/ps2dev.cmake, so setting PS2DEV is all this
       # needs.
       #
       # BUILD_SAMPLES=OFF: real, several samples need prerequisites this
