@@ -189,11 +189,11 @@ add_irx_source(core bdmfs_fatfs bdmfs_fatfs.irx BDMFS_FATFS_IRX)
 add_irx_source(core usbd usbd.irx USBD_IRX)
 add_irx_source(core usbmass_bd usbmass_bd.irx USBMASS_BD_IRX)   # not yet migrated
 add_irx_source(core mx4sio_bd mx4sio_bd.irx MX4SIO_BD_IRX)      # not yet migrated
-add_irx_source(core cdfs cdfs.irx CDFS_IRX)                     # not yet migrated
-add_irx_source(core dev9 ps2dev9.irx PS2DEV9_IRX)                # not yet migrated
-add_irx_source(core atad ps2atad.irx PS2ATAD_IRX)                 # not yet migrated
-add_irx_source(core hdd ps2hdd.irx PS2HDD_IRX)                   # not yet migrated
-add_irx_source(core fs ps2fs.irx PS2FS_IRX)                    # not yet migrated
+add_irx_source(core cdfs cdfs.irx CDFS_IRX)
+add_irx_source(core dev9 ps2dev9.irx PS2DEV9_IRX)
+add_irx_source(core atad ps2atad.irx PS2ATAD_IRX)
+add_irx_source(core apa ps2hdd.irx PS2HDD_IRX)
+add_irx_source(core fs ps2fs.irx PS2FS_IRX)
 add_irx_source(core mtapman mtapman.irx MTAPMAN_IRX)
 add_irx_source(core padman padman.irx PADMAN_IRX)
 add_irx_source(core libsd libsd.irx LIBSD_IRX)
