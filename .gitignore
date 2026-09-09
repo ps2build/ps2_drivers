@@ -58,3 +58,4 @@ dkms.conf
 *_irx.c
 # CMake build directory
 build/
+.clangd
